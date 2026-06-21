@@ -1,0 +1,229 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rl-allocator"
+version = "0.1.0"
+description = "A leakage-free, overfit-aware multi-asset RL portfolio allocator: train a PPO agent to allocate across a multi-asset basket (a weight simplex) in a cost-aware portfolio environment and benchmark it honestly out-of-sample against equal-weight, Markowitz and risk-parity baselines inside a purged walk-forward, with a vectorized-vs-stepwise parity oracle (1e-10), an across-seed seed-lottery overfit check, Diebold-Mariano, a Deflated-Sharpe correction, and a Probability-of-Backtest-Overfitting check — the documented result is that the agent does NOT reliably beat the baselines net of costs; the OOS Sharpe is indistinguishable from them. Execution is SIMULATED, never a live broker."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "FatihHekim0glu" }]
+keywords = [
+    "reinforcement-learning",
+    "ppo",
+    "portfolio-allocation",
+    "asset-allocation",
+    "backtesting",
+    "overfitting",
+    "honest-null",
+    "leakage-free",
+    "seed-lottery",
+    "diebold-mariano",
+    "deflated-sharpe",
+    "probability-of-backtest-overfitting",
+    "onnx",
+    "quantitative-finance",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.26",
+]
+
+[project.urls]
+Homepage = "https://fatihhekimoglu.com"
+Repository = "https://github.com/FatihHekim0glu/rl-allocator"
+Changelog = "https://github.com/FatihHekim0glu/rl-allocator/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+# Data generation/loading + the honest-statistics layer (numpy/pandas/scipy + cache).
+data = [
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "scipy>=1.11",
+    "pyarrow>=15.0",
+    "diskcache>=5.6",
+]
+# Lean inference path: onnxruntime + numpy ONLY (the container — NEVER torch/sb3/gymnasium).
+serve = [
+    "onnxruntime>=1.17",
+]
+# Offline training/export path (heavy; never imported in the serve container). torch
+# (CPU-only) + stable-baselines3 train the PPO allocator in the gym-wrapped portfolio
+# env; gymnasium provides the env API; onnx exports ONLY the policy MLP.
+train = [
+    "torch>=2.2",
+    "stable-baselines3>=2.3",
+    "gymnasium>=0.29",
+    "onnx>=1.16",
+]
+# Plotly figure builders (figures serialize to {data, layout} JSON).
+viz = [
+    "plotly>=5.20",
+    "kaleido>=0.2.1",
+]
+# Developer + parity-oracle + lint/type/test stack. Includes the lean serve stack
+# (onnxruntime) + onnx so the serve / export tests run in CI WITHOUT the heavy [train]
+# (torch) extra. NO [all] aggregate — the container installs only the lean extras.
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pandas-stubs>=2.0",
+    "typer>=0.12",
+    "onnxruntime>=1.17",
+    "onnx>=1.16",
+]
+
+[project.scripts]
+rl-allocator = "rlallocator.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rlallocator"]
+# Ship the committed ONNX policy + precomputed metrics inside the wheel.
+artifacts = [
+    "src/rlallocator/artifacts/*.onnx",
+    "src/rlallocator/artifacts/metrics.json",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/rlallocator",
+    "tests",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "CITATION.cff",
+]
+
+# --------------------------------------------------------------------------- #
+# Ruff                                                                        #
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+    "NPY",  # numpy-specific
+    "PD",   # pandas-vet
+]
+ignore = [
+    "E501",    # line length handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["N802", "N803", "N806"]  # math-style names in tests
+
+[tool.ruff.lint.pep8-naming]
+# Math-style single-capital names (return panel R, weight W, covariance N) are intentional.
+extend-ignore-names = ["N", "T", "R", "W", "V"]
+
+# --------------------------------------------------------------------------- #
+# mypy (strict)                                                               #
+# --------------------------------------------------------------------------- #
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+no_implicit_optional = true
+show_error_codes = true
+files = ["src/rlallocator"]
+
+# Documented pandas override: pandas-stubs is incomplete for some DataFrame
+# operations; we accept untyped pandas internals at the boundary while keeping our own
+# signatures strictly typed. (House convention: curated pandas suppression.)
+[[tool.mypy.overrides]]
+module = ["pandas.*"]
+follow_imports = "skip"
+disallow_untyped_defs = false
+
+# Third-party boundaries with missing / partial stubs: treat their symbols as ``Any``.
+[[tool.mypy.overrides]]
+module = [
+    "scipy.*",
+    "onnx.*",
+    "onnxruntime.*",
+    "diskcache.*",
+    "plotly.*",
+    "typer.*",
+    "httpx.*",
+]
+ignore_missing_imports = true
+
+# The heavy ``[train]`` boundary (torch / stable-baselines3 / gymnasium). ``follow_imports
+# = "skip"`` keeps mypy's result IDENTICAL whether or not the ``[train]`` extra happens to
+# be installed locally — the CI gate installs only [data,serve,viz,dev], so these are
+# absent there and resolve to ``Any``. Pinning the same here means our strictly-typed
+# signatures at the boundary stay the single source of truth, and the inherently dynamic
+# SB3/torch policy-extraction attribute access is accepted as ``Any`` rather than
+# scattering per-line ignores that flip on install state.
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "stable_baselines3.*",
+    "gymnasium.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# --------------------------------------------------------------------------- #
+# pytest                                                                       #
+# --------------------------------------------------------------------------- #
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "unit: fast isolated unit tests",
+    "property: Hypothesis property-based invariant tests (causal reward, backtester<->env parity, simplex validity, cost monotonicity)",
+    "parity: validation against an independent reference (vectorized<->stepwise 1e-10, ONNX-vs-torch 1e-4, DSR, DM, PBO, baseline weights)",
+    "regression: pinned-snapshot / locked-behaviour tests (learnable_edge sanity + the honest-null RL-does-not-beat-baselines guard + the served-path-uses-walk-forward guard + the leaky negative control)",
+    "integration: end-to-end pipeline tests (synthetic -> env -> committed ONNX policy + live baselines -> walk-forward metrics -> verdict)",
+    "slow: long-running tests (the torch/sb3 [train] path)",
+]
+
+# --------------------------------------------------------------------------- #
+# Coverage                                                                     #
+# --------------------------------------------------------------------------- #
+[tool.coverage.run]
+branch = true
+source = ["rlallocator"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@overload",
+]

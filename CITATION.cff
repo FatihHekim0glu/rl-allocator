@@ -1,0 +1,81 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "rl-allocator: A leakage-free, overfit-aware multi-asset RL portfolio allocator (honest NULL)"
+abstract: >-
+  A pure, typed Python benchmark that trains a PPO agent to allocate across a
+  multi-asset basket (a simplex of portfolio weights) in a realistic, cost-aware
+  portfolio environment and judges it honestly out-of-sample against equal-weight,
+  Markowitz mean-variance, and risk-parity baselines inside a purged walk-forward, with
+  a vectorized-vs-stepwise parity oracle (1e-10), an across-seed seed-lottery overfit
+  check, Diebold-Mariano, a Deflated-Sharpe correction, and a Probability-of-Backtest-
+  Overfitting (CSCV) check. The documented result is that the agent does NOT reliably
+  beat the baselines net of costs: the out-of-sample Sharpe is dispersed around and
+  statistically indistinguishable from them. Execution is SIMULATED, never a live broker.
+type: software
+version: 0.1.0
+date-released: "2026-06-21"
+license: MIT
+repository-code: "https://github.com/FatihHekim0glu/rl-allocator"
+url: "https://fatihhekimoglu.com"
+authors:
+  - family-names: "Hekimoglu"
+    given-names: "Fatih"
+keywords:
+  - reinforcement-learning
+  - portfolio-allocation
+  - overfitting
+  - honest-null
+  - deflated-sharpe
+  - probability-of-backtest-overfitting
+references:
+  - type: article
+    authors:
+      - family-names: "Schulman"
+        given-names: "John"
+      - family-names: "Wolski"
+        given-names: "Filip"
+      - family-names: "Dhariwal"
+        given-names: "Prafulla"
+      - family-names: "Radford"
+        given-names: "Alec"
+      - family-names: "Klimov"
+        given-names: "Oleg"
+    title: "Proximal Policy Optimization Algorithms"
+    year: 2017
+    url: "https://arxiv.org/abs/1707.06347"
+  - type: article
+    authors:
+      - family-names: "Bailey"
+        given-names: "David H."
+      - family-names: "López de Prado"
+        given-names: "Marcos"
+    title: "The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting, and Non-Normality"
+    journal: "The Journal of Portfolio Management"
+    year: 2014
+  - type: article
+    authors:
+      - family-names: "Bailey"
+        given-names: "David H."
+      - family-names: "Borwein"
+        given-names: "Jonathan M."
+      - family-names: "López de Prado"
+        given-names: "Marcos"
+      - family-names: "Zhu"
+        given-names: "Qiji Jim"
+    title: "The Probability of Backtest Overfitting"
+    journal: "Journal of Computational Finance"
+    year: 2017
+  - type: article
+    authors:
+      - family-names: "Markowitz"
+        given-names: "Harry"
+    title: "Portfolio Selection"
+    journal: "The Journal of Finance"
+    year: 1952
+  - type: book
+    authors:
+      - family-names: "López de Prado"
+        given-names: "Marcos"
+    title: "Advances in Financial Machine Learning"
+    publisher: "Wiley"
+    year: 2018

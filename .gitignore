@@ -1,0 +1,94 @@
+# --------------------------------------------------------------------------- #
+# Python                                                                       #
+# --------------------------------------------------------------------------- #
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --------------------------------------------------------------------------- #
+# Virtual environments                                                         #
+# --------------------------------------------------------------------------- #
+.venv/
+venv/
+# Anchor the virtualenv dir patterns to the repo root so they do NOT match the
+# source subpackage src/rlallocator/env/ (an unanchored ``env/`` matches any depth).
+/env/
+/ENV/
+.python-version
+
+# --------------------------------------------------------------------------- #
+# Testing / coverage / type-checking caches                                    #
+# --------------------------------------------------------------------------- #
+.pytest_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# --------------------------------------------------------------------------- #
+# Data artifacts (cached panels, never commit raw market data)                 #
+# --------------------------------------------------------------------------- #
+*.parquet
+.cache/
+data_cache/
+*.feather
+
+# --------------------------------------------------------------------------- #
+# Notebooks                                                                     #
+# --------------------------------------------------------------------------- #
+.ipynb_checkpoints/
+
+# --------------------------------------------------------------------------- #
+# Editors / OS                                                                  #
+# --------------------------------------------------------------------------- #
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# --------------------------------------------------------------------------- #
+# Agent / assistant artifacts                                                   #
+# --------------------------------------------------------------------------- #
+.claude/
+.specstory/
+.env
+.env.*
+*.key
+.secrets/
+
+# --------------------------------------------------------------------------- #
+# Committed model artifacts — the SHIPPED ONNX policy + precomputed metrics      #
+# under src/rlallocator/artifacts/ are deliberately TRACKED (they ship in the    #
+# wheel and back the deployed serve path). Ignore stray ONNX / metrics.json      #
+# elsewhere (e.g. a scratch ./artifacts/ at the repo root) but never the         #
+# shipped ones.                                                                  #
+# --------------------------------------------------------------------------- #
+/artifacts/*.onnx
+/artifacts/metrics.json
+!src/rlallocator/artifacts/
+!src/rlallocator/artifacts/*.onnx
+!src/rlallocator/artifacts/metrics.json
