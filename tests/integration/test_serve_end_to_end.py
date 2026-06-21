@@ -12,6 +12,14 @@ from rlallocator.serve import RlAllocatorRun, run_allocation
 @pytest.mark.integration
 def test_end_to_end_run_allocation_synthetic() -> None:
     """run_allocation produces a JSON-safe run on the synthetic panel, torch-free."""
+    # Snapshot which heavy modules are already loaded by a SIBLING test (the [train]
+    # parity/PPO tests share this process), then assert the SERVE CALL itself imports
+    # NONE of them. This measures the serve path's own import footprint without mutating
+    # the shared sys.modules (popping a half-imported torch corrupts its submodule
+    # state). In the lean serve container / CI ([dev], no torch) the set is empty anyway.
+    _HEAVY = ("torch", "stable_baselines3", "gymnasium")
+    preloaded = {m for m in _HEAVY if m in sys.modules}
+
     run = run_allocation(
         n_assets=6, n_seeds=5, cost_bps=10.0, lookback=32, rebalance="monthly", seed=7
     )
@@ -38,10 +46,10 @@ def test_end_to_end_run_allocation_synthetic() -> None:
     assert summary["rl_beats_baselines"] is False
     assert summary["data_source"] == "synthetic"
 
-    # No torch / sb3 / gymnasium was imported by the serve path.
-    assert "torch" not in sys.modules
-    assert "stable_baselines3" not in sys.modules
-    assert "gymnasium" not in sys.modules
+    # No torch / sb3 / gymnasium was imported BY the serve path (anything heavy already
+    # loaded by a sibling [train] test is excluded — the serve call adds none of them).
+    newly_loaded = {m for m in _HEAVY if m in sys.modules} - preloaded
+    assert not newly_loaded, f"serve path imported heavy modules: {sorted(newly_loaded)}"
 
 
 @pytest.mark.integration
