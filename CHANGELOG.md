@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Documentation ship: `docs/DESIGN.md` (the system design — causal env, parity oracle,
+  walk-forward-in-served-path wiring, offline-train → ONNX-serve split, and the honesty
+  stack) and `docs/decisions/` Architecture Decision Records (simplex-weight action,
+  causal next-bar reward, parity oracle, walk-forward served path, DSR confidence gate,
+  ONNX-policy serve).
 - Offline training pipeline (`train.py`) wired end-to-end behind an INJECTABLE
   `trainer` seam: synthetic panel → purged/embargoed walk-forward → per-seed policy
   train → ONNX export → each FROZEN ONNX policy scored on the concatenated purged OOS
@@ -27,6 +32,14 @@ All notable changes to this project are documented here. The format follows
   placeholder.
 
 ### Changed
+- README: replaced the Validation placeholder with the ACTUAL committed metrics
+  (`artifacts/metrics.json`) — RL median OOS Sharpe, the three baseline Sharpes, the best
+  baseline, the across-seed band, DM p-value, Deflated Sharpe, PBO, and
+  `rl_beats_baselines = false`; added a correctness-gates table (parity 1e-10, ONNX↔torch
+  1e-4, DSR 1e-10, DM, PBO/CSCV, causal obs/reward, valid simplex, walk-forward-in-served-
+  path, learnable_edge sanity, honest null), a Reproduce block (lean install +
+  train/backtest/compare + EODHD/Polygon real-data path + ruff/mypy/pytest gates), and
+  tightened Limitations.
 - `agents/ppo.py` / `agents/onnx_policy.py` / `train.py` graduated from typed
   `NotImplementedError` stubs to the implemented offline path (SB3 PPO → policy-MLP
   extraction → ONNX export with a 1e-4 torch-vs-ONNX parity gate → onnxruntime serve).
