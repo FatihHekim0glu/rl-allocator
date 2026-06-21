@@ -7,9 +7,9 @@
   "kind": "factor_regime",
   "manifest": {
     "config_hash": "b62936edab52d92f8c2610f32f7f3078",
-    "dirty": true,
+    "dirty": false,
     "extra": {},
-    "git_sha": "bc56c55",
+    "git_sha": "baafcab",
     "seed": 7
   },
   "max_drawdown": -0.7064221166279709,
