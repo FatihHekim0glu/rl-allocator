@@ -45,7 +45,7 @@ def test_run_allocation_validates_request() -> None:
 @pytest.mark.unit
 def test_equity_curve_figure_shape() -> None:
     """The equity figure serializes to a {data, layout} mapping with all traces."""
-    rl = np.cumprod(1.0 + np.full(20, 0.001))
+    rl = np.cumprod(1.0 + np.full(20, 0.001), dtype="float64")
     baselines = {
         "equal_weight": (1.0 + np.full(20, 0.0005)).cumprod().tolist(),
         "markowitz": (1.0 + np.full(20, 0.0004)).cumprod().tolist(),
