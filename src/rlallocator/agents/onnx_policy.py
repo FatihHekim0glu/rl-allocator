@@ -1,19 +1,20 @@
 """ONNX policy inference — the SERVE path (onnxruntime, NEVER torch).
 
-TYPED STUB (SCAFFOLD). The container and the FastAPI router run the trained PPO
-policy through this module ONLY. It loads the committed ``artifacts/policy.onnx`` MLP
-with onnxruntime (the ``[serve]`` extra = numpy + onnxruntime) and runs a forward
-pass mapping an observation (look-back window + current weights) to per-asset SCORES,
-which are projected onto the long-only weight SIMPLEX via
+The container and the FastAPI router run the trained PPO policy through this module
+ONLY. It loads the committed ``artifacts/policy.onnx`` MLP with onnxruntime (the
+``[serve]`` extra = numpy + onnxruntime) and runs a forward pass mapping an
+observation (look-back window + current weights) to per-asset SCORES, which are
+projected onto the long-only weight SIMPLEX via
 :func:`rlallocator._validation.project_to_simplex`; torch / stable-baselines3 /
 gymnasium are NEVER imported here. onnxruntime is imported LAZILY inside the methods
 so that ``import rlallocator`` stays free of any inference engine.
 
-:func:`default_artifact_path` (pure path arithmetic, no I/O) IS implemented so the
-serve / CLI path can probe for the committed artifact and gracefully degrade to a
-baselines-only comparison while the offline-trained policy is a separate deliverable.
-The inference methods raise ``NotImplementedError`` until the artifact + onnxruntime
-wiring is committed.
+:class:`OnnxPolicy` is the low-level session wrapper over the committed artifact;
+:func:`default_artifact_path` resolves the shipped ``policy.onnx`` path (pure path
+arithmetic, no I/O) so the serve / CLI path can probe for the committed artifact and
+gracefully degrade to a baselines-only comparison when the offline-trained policy is
+absent. The serve path turns the per-bar ONNX scores into a simplex weight path and
+hands it to the pure-numpy vectorized backtester — no torch, no gymnasium at serve.
 
 Importing this module has no side effects.
 """
@@ -54,13 +55,12 @@ def default_artifact_path() -> Path:
 class OnnxPolicy:
     """A thin onnxruntime wrapper that serves the committed PPO policy artifact.
 
-    TYPED STUB (SCAFFOLD). The onnxruntime session is created LAZILY on first use,
-    so constructing this object is cheap and import-pure; torch / stable-baselines3 /
-    gymnasium are never imported on this path. The forward pass binds the per-bar
-    OBSERVATION (look-back window + current weights) to the exported policy graph and
-    projects the per-asset score output onto the long-only weight simplex. The
-    inference methods raise ``NotImplementedError`` until the artifact + onnxruntime
-    wiring is committed.
+    The onnxruntime session is created LAZILY on first :meth:`predict_scores` (or via
+    :meth:`load`), so constructing this object is cheap and import-pure; torch /
+    stable-baselines3 / gymnasium are never imported on this path. The forward pass
+    binds the per-bar OBSERVATION (look-back window + current weights) to the exported
+    policy graph and projects the per-asset score output onto the long-only weight
+    simplex (a valid simplex EVERY bar by construction).
     """
 
     def __init__(self, artifact_path: str | Path | None = None) -> None:
@@ -83,10 +83,11 @@ class OnnxPolicy:
     def load(self) -> OnnxPolicy:
         """Create the onnxruntime inference session (lazy, idempotent).
 
-        LAZY IMPORT: ``onnxruntime`` will be imported inside this method. NO torch /
-        sb3 / gymnasium import occurs anywhere on this path. The artifact file is
-        checked BEFORE onnxruntime is imported, so a missing artifact raises
-        :class:`ArtifactError` without loading any inference engine.
+        LAZY IMPORT: ``onnxruntime`` is imported inside this method. NO torch / sb3 /
+        gymnasium import occurs anywhere on this path. Calling :meth:`load` twice
+        reuses the session (idempotent). The artifact file is checked BEFORE
+        onnxruntime is imported, so a missing artifact raises :class:`ArtifactError`
+        without loading any inference engine.
 
         Returns
         -------
@@ -96,26 +97,41 @@ class OnnxPolicy:
         Raises
         ------
         ArtifactError
-            If the artifact file is missing.
-        NotImplementedError
-            Until the onnxruntime session wiring is committed.
+            If the artifact file is missing or the session fails to initialize.
         """
+        if self._session is not None:
+            return self
+
         if not self._artifact_path.is_file():
             raise ArtifactError(
                 f"OnnxPolicy.load: policy ONNX artifact not found at {self._artifact_path}."
             )
-        raise NotImplementedError(
-            "OnnxPolicy.load is a scaffold stub; the onnxruntime session wiring is "
-            "committed alongside the offline-trained policy.onnx artifact."
-        )
+
+        try:
+            import onnxruntime as ort
+
+            self._session = ort.InferenceSession(
+                str(self._artifact_path),
+                providers=["CPUExecutionProvider"],
+            )
+        except ArtifactError:  # pragma: no cover - defensive: re-raise our own errors verbatim
+            raise
+        except Exception as exc:  # normalize any onnxruntime error to ArtifactError
+            raise ArtifactError(
+                f"OnnxPolicy.load: failed to initialize onnxruntime session for "
+                f"{self._artifact_path}: {exc}"
+            ) from exc
+        return self
 
     def predict_scores(self, observations: ObservationMatrix) -> FloatArray:
         """Return the raw per-asset score logits for a batch of observations (ONNX, no torch).
 
-        The lower-level forward pass behind :meth:`predict_weights`: binds
-        ``observations`` to the exported graph and returns the raw
-        ``(batch, n_assets)`` per-asset scores. Used by the ONNX-vs-torch parity test
-        (validated to 1e-4 against the SB3 policy). NO torch on this path.
+        Loads the session on first use (lazy), binds ``observations`` to the exported
+        graph's input, and returns the raw ``(batch, n_assets)`` per-asset scores. The
+        lower-level forward pass behind :meth:`predict_weights`; used by the
+        ONNX-vs-torch parity test (validated to 1e-4 against the SB3 policy). The
+        inputs MUST already be in the form the artifact was exported with (the same
+        observation construction the env uses). NO torch on this path.
 
         Parameters
         ----------
@@ -129,13 +145,39 @@ class OnnxPolicy:
 
         Raises
         ------
-        NotImplementedError
-            Until the onnxruntime forward pass is committed.
+        ArtifactError
+            If the session cannot be loaded or the input shape does not match the
+            exported policy signature.
         """
-        raise NotImplementedError(
-            "OnnxPolicy.predict_scores is a scaffold stub; implemented with the "
-            "committed policy.onnx + onnxruntime session."
-        )
+        self.load()
+        session = self._session
+        if session is None:  # pragma: no cover - load() guarantees a session or raises
+            raise ArtifactError("OnnxPolicy.predict_scores: session is not initialized.")
+
+        batch = self._coerce_observations(observations)
+        n_rows = int(batch.shape[0])
+
+        # The ONNX policy is exported with a float32 input signature; cast at the
+        # boundary so the served forward pass matches the export probe exactly.
+        input_name = session.get_inputs()[0].name  # type: ignore[attr-defined]
+        feeds = {input_name: batch.astype("float32")}
+        try:
+            outputs = session.run(None, feeds)  # type: ignore[attr-defined]
+        except Exception as exc:  # normalize any onnxruntime run error to ArtifactError
+            raise ArtifactError(
+                f"OnnxPolicy.predict_scores: onnxruntime run failed "
+                f"(artifact {self._artifact_path}): {exc}"
+            ) from exc
+
+        scores = np.asarray(outputs[0], dtype="float64")
+        if scores.ndim == 1:
+            scores = scores.reshape(n_rows, -1)
+        if scores.ndim != 2 or int(scores.shape[0]) != n_rows:
+            raise ArtifactError(
+                f"OnnxPolicy.predict_scores: policy returned shape {scores.shape} for "
+                f"{n_rows} observation(s); the artifact signature does not match the inputs."
+            )
+        return scores
 
     def predict_weights(self, observations: ObservationMatrix) -> FloatArray:
         """Map a batch of observations to per-bar weight SIMPLICES via the committed policy.
@@ -158,14 +200,41 @@ class OnnxPolicy:
 
         Raises
         ------
-        NotImplementedError
-            Until the onnxruntime forward pass is committed.
+        ArtifactError
+            If the session cannot be loaded or the input shape does not match the
+            exported policy signature.
         """
         scores = self.predict_scores(observations)
         rows = [
             project_to_simplex(np.asarray(row, dtype="float64")) for row in np.atleast_2d(scores)
         ]
         return np.asarray(rows, dtype="float64")
+
+    @staticmethod
+    def _coerce_observations(observations: ObservationMatrix) -> FloatArray:
+        """Coerce + validate an observation batch to a finite ``(batch, obs_dim)`` float array.
+
+        Shared input boundary for the ONNX forward pass: a single observation vector
+        is reshaped to a 1-row batch, the result is checked for being 2-D, non-empty
+        and finite, and returned as a float64 array ready to cast to the float32 export
+        signature.
+
+        Raises
+        ------
+        ArtifactError
+            If the input is not coercible to a non-empty, finite ``(batch, obs_dim)``
+            matrix (a serve-path input/signature failure).
+        """
+        arr = np.asarray(observations, dtype="float64")
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        if arr.ndim != 2:
+            raise ArtifactError(f"observations must be 1-D or 2-D, got ndim={arr.ndim}.")
+        if arr.shape[0] == 0 or arr.shape[1] == 0:
+            raise ArtifactError("observations must have at least one row and one column.")
+        if not bool(np.isfinite(arr).all()):
+            raise ArtifactError("observations must be finite (no NaN/inf).")
+        return arr
 
 
 def score_weights_from_onnx(
@@ -194,7 +263,5 @@ def score_weights_from_onnx(
     ------
     ArtifactError
         If the artifact is missing/corrupt or its signature mismatches the inputs.
-    NotImplementedError
-        Until the onnxruntime forward pass is committed.
     """
     return OnnxPolicy(artifact_path).predict_weights(observations)
