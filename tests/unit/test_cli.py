@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
 from rlallocator.cli import backtest, build_app, compare, main, train
+
+#: The offline ``[train]`` extra availability; the ``train`` command's
+#: trainer-unavailable behaviour only holds without it (else it would train).
+_HAS_TRAIN: bool = bool(importlib.util.find_spec("torch"))
 
 
 @pytest.mark.unit
@@ -37,8 +43,16 @@ def test_compare_command_prints_verdict(capsys: pytest.CaptureFixture[str]) -> N
 
 
 @pytest.mark.unit
-def test_train_command_surfaces_stub(capsys: pytest.CaptureFixture[str]) -> None:
-    """The train command surfaces the scaffold-stub state cleanly (exit 1)."""
+@pytest.mark.skipif(_HAS_TRAIN, reason="[train] extra installed: the train command would proceed")
+def test_train_command_unavailable_without_train_extra(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without the [train] extra, the train command surfaces it cleanly (exit 1).
+
+    The lean serve / CI env has no torch / sb3 / gymnasium, so the default SB3 trainer is
+    unavailable; the CLI catches the NotImplementedError and exits non-zero with a clean
+    message rather than crashing.
+    """
     code = train(n_assets=4, n_seeds=2, lookback=16, cost_bps=10.0, seed=7)
     assert code == 1
     assert "train unavailable" in capsys.readouterr().out

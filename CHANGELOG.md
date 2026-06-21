@@ -7,6 +7,31 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Offline training pipeline (`train.py`) wired end-to-end behind an INJECTABLE
+  `trainer` seam: synthetic panel → purged/embargoed walk-forward → per-seed policy
+  train → ONNX export → each FROZEN ONNX policy scored on the concatenated purged OOS
+  folds (pure numpy, no test-time learning) → seed lottery + DM-vs-best + Deflated
+  Sharpe + CSCV PBO (`n_trials = #seeds × #HP`) → the PURE `rl_beats_baselines`
+  verdict → committed `artifacts/{policy.onnx, metrics.json}` + a `RunManifest`. torch /
+  stable-baselines3 / gymnasium are reached ONLY through the seam, so the whole
+  orchestration is covered TORCH-FREE by injecting a numpy+onnx trainer (a fresh-
+  interpreter subprocess test pins it).
+- Committed offline-trained artifacts: a real SB3-PPO policy MLP exported to ONNX
+  (`artifacts/policy.onnx`, < 10 MB) + the precomputed honest-NULL `metrics.json`
+  (`scripts/train_committed_policy.py` reproduces them).
+- The served path now computes the headline RL OOS metrics from the SAME purged
+  walk-forward folds as the baselines: `serve.run_allocation` serves the committed ONNX
+  policy on each fold's OOS block (onnxruntime, NO torch) and RE-DERIVES the PURE
+  verdict from the live walk-forward Diebold-Mariano + the committed-offline DSR /
+  seed-lower-bound / PBO gates. Absent a committed policy it degrades to the honest-NULL
+  placeholder.
+
+### Changed
+- `agents/ppo.py` / `agents/onnx_policy.py` / `train.py` graduated from typed
+  `NotImplementedError` stubs to the implemented offline path (SB3 PPO → policy-MLP
+  extraction → ONNX export with a 1e-4 torch-vs-ONNX parity gate → onnxruntime serve).
+
+### Initial scaffold
 - Initial scaffold of `rl-allocator`: a leakage-free, overfit-aware multi-asset RL
   portfolio allocator with an honest-NULL deliverable.
 - Import-pure, strictly-typed `src/rlallocator/` package (src-layout, `py.typed`).
@@ -32,8 +57,9 @@ All notable changes to this project are documented here. The format follows
   `learnable_edge` sanity fixture, and a `pure_noise` strict null (`data/synthetic.py`),
   plus the lazy loaders + the vendored Polygon provider (`data/loaders.py`,
   `data_providers/polygon.py`).
-- Typed stubs (signatures + docstrings + `NotImplementedError`) for the offline
-  `[train]` path: `agents/ppo.py`, `agents/onnx_policy.py`, `train.py`.
+- The offline `[train]` path modules `agents/ppo.py` (SB3 PPO wrapper + policy-MLP
+  extraction + ONNX export), `agents/onnx_policy.py` (onnxruntime serve), and `train.py`
+  (the pipeline orchestration).
 - Lazy-plotly figure builders (`plots.py`: equity curves, the weight-allocation area
   chart, the seed-lottery dispersion) and the Typer CLI (`cli.py`).
 - Partitioned tests (`unit` / `parity` / `property` / `regression` / `integration`)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -15,6 +18,11 @@ from rlallocator.plots import (
 )
 from rlallocator.serve import RlAllocatorRun, run_allocation
 from rlallocator.train import n_effective_trials, train_pipeline
+
+#: The offline ``[train]`` extra (torch + sb3 + gymnasium) availability. The default
+#: trainer's NotImplementedError-without-train guards skip when it IS installed (the
+#: default trainer would then proceed to actually train).
+_HAS_TRAIN: bool = bool(importlib.util.find_spec("torch"))
 
 
 @pytest.mark.unit
@@ -82,17 +90,49 @@ def test_n_effective_trials_counts_seeds_times_hp() -> None:
 
 
 @pytest.mark.unit
-def test_train_pipeline_is_scaffold_stub() -> None:
-    """The offline train pipeline is a scaffold stub (NotImplementedError)."""
+@pytest.mark.skipif(
+    _HAS_TRAIN, reason="[train] extra (torch+sb3) installed: default trainer proceeds"
+)
+def test_train_pipeline_default_trainer_requires_train_extra(tmp_path: Path) -> None:
+    """The default SB3 trainer is unavailable without the [train] extra (NotImplementedError).
+
+    The offline pipeline's DEFAULT trainer (``trainer=None`` => SB3 PPO) needs torch +
+    stable-baselines3 + gymnasium; absent them (the lean CI / serve env) it raises a
+    clean NotImplementedError. The orchestration itself is covered torch-free by
+    injecting a trainer (see the train-pipeline integration test). ``artifacts_dir`` is
+    a temp dir so the committed package artifact is never touched.
+    """
     with pytest.raises(NotImplementedError):
-        train_pipeline(n_seeds=2)
+        train_pipeline(n_seeds=2, n_obs=300, lookback=8, n_folds=2, artifacts_dir=tmp_path)
 
 
 @pytest.mark.unit
-def test_ppo_agent_stub_raises() -> None:
-    """The PPO agent training / export are scaffold stubs (NotImplementedError)."""
+def test_train_pipeline_validates_request(tmp_path: Path) -> None:
+    """The offline pipeline enforces n_seeds / lookback / n_folds before any training.
+
+    ``artifacts_dir`` is a temp dir so the validation-path tests never touch the
+    committed package artifact even if the [train] extra is installed.
+    """
+    with pytest.raises(ValidationError):
+        train_pipeline(n_seeds=0, artifacts_dir=tmp_path)
+    with pytest.raises(ValidationError):
+        train_pipeline(lookback=0, artifacts_dir=tmp_path)
+    with pytest.raises(ValidationError):
+        train_pipeline(n_folds=0, artifacts_dir=tmp_path)
+
+
+@pytest.mark.unit
+def test_ppo_agent_starts_untrained() -> None:
+    """A freshly built PPO agent is untrained until ``train`` produces a policy."""
     agent = PpoAgent(PpoConfig(obs_dim=10, n_assets=3))
     assert not agent.is_trained
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(_HAS_TRAIN, reason="[train] extra (torch+sb3) installed: train would proceed")
+def test_ppo_agent_train_requires_train_extra() -> None:
+    """Without the [train] extra, ``PpoAgent.train`` raises NotImplementedError."""
+    agent = PpoAgent(PpoConfig(obs_dim=10, n_assets=3))
     with pytest.raises(NotImplementedError):
         agent.train(env=object())
 

@@ -48,7 +48,7 @@ leakage-free, honest-NULL outcome.
 | --- | --- |
 | Causal reward | Weights set at `t` earn `t → t+1` returns; obs at `t` uses only data `≤ t` (future-perturbation-invariance property test). |
 | Parity oracle | Vectorized multi-asset backtester == step-by-step env rollout to **1e-10** for arbitrary weight paths, plus a deliberately-leaky negative control the oracle catches. |
-| Purged walk-forward | `serve.run_allocation` computes the headline OOS metrics from the **concatenated purged folds** (purge ≥ 1 + embargo = 1), not the full sample; a regression asserts the served path calls the walk-forward fn. |
+| Purged walk-forward | `serve.run_allocation` computes the headline OOS metrics — for the **baselines AND the committed ONNX policy** — from the **concatenated purged folds** (purge ≥ 1 + embargo = 1), not the full sample; the policy is served per-fold via onnxruntime (no torch) and the pure verdict is re-derived from the live DM + committed DSR / seed-lo / PBO. A regression asserts the served path calls the walk-forward fn. |
 | Train-only covariance | Markowitz / risk-parity estimate covariance on the **train fold only** (no look-ahead). |
 | Valid simplex | The weight vector is a valid long-only simplex **every bar** (a property test). |
 | Seed lottery | N independent training seeds; the verdict requires the across-seed Sharpe **lower bound > 0**. |
@@ -59,8 +59,8 @@ leakage-free, honest-NULL outcome.
 ## Install
 
 ```bash
-uv venv && uv pip install -e '.[data,viz,dev]'   # lean: NO torch/sb3/gymnasium
-uv pip install -e '.[train]'                       # offline training only (torch + SB3)
+uv venv && uv pip install -e '.[data,serve,viz,dev]'   # lean: onnxruntime, NO torch/sb3
+uv pip install -e '.[train]'                             # offline training only (torch + SB3)
 ```
 
 The lean serve path imports **onnxruntime only** — never torch / sb3 / gymnasium.

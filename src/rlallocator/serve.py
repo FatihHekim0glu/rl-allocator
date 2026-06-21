@@ -205,15 +205,22 @@ def run_allocation(
         n_assets=n_assets, data_source_pref=data_source_pref, seed=seed
     )
 
-    # WALK-FORWARD WIRED IN: the headline baseline OOS metrics come from the
-    # CONCATENATED purged walk-forward folds (each fold's covariance estimated on its
-    # own TRAIN block), NOT the full sample. This is the rigorous served path.
+    # WALK-FORWARD WIRED IN: the headline OOS metrics — for the BASELINES AND the RL
+    # policy — come from the CONCATENATED purged walk-forward folds (each baseline's
+    # covariance estimated on its own TRAIN block; the committed ONNX policy SERVED on
+    # each fold's OOS block via onnxruntime, NO torch), NOT the full sample. This is the
+    # rigorous served path. The inherently multi-seed quantities (seed lottery, DSR,
+    # PBO) come from the committed offline ``metrics.json``; the request NEVER trains.
     folds = make_folds(returns.shape[0], lookback=lookback, n_folds=_N_WALK_FORWARD_FOLDS)
     baseline_nets = _walk_forward_baselines(returns, folds=folds, cost_bps=cost_bps)
+    served_rl = _walk_forward_rl_policy(
+        returns, folds=folds, lookback=lookback, n_assets=n_assets, cost_bps=cost_bps
+    )
 
     committed = _read_committed_metrics()
     summary = _build_summary(
         baseline_nets=baseline_nets,
+        served_rl=served_rl,
         committed=committed,
         n_seeds=n_seeds,
         data_source=data_source,
@@ -304,44 +311,190 @@ def _walk_forward_baselines(
     return concatenated
 
 
+@dataclass(frozen=True, slots=True)
+class _ServedRl:
+    """The committed ONNX policy's walk-forward OOS net returns + applied weight path."""
+
+    net_returns: FloatArray
+    weights: FloatArray
+
+
+def _walk_forward_rl_policy(
+    returns: FloatArray,
+    *,
+    folds: list[Fold],
+    lookback: int,
+    n_assets: int,
+    cost_bps: float,
+) -> _ServedRl | None:
+    """Serve the committed ONNX policy on the CONCATENATED purged OOS folds (no torch).
+
+    When the committed ``artifacts/policy.onnx`` is present, the FROZEN policy is served
+    through onnxruntime (NEVER torch) on each fold's OOS block and scored through the
+    SHARED vectorized backtester — the RL-side analog of :func:`_walk_forward_baselines`,
+    so the headline RL OOS metrics are walk-forward-computed on the served policy, not a
+    full-sample fit. Returns the CONCATENATED per-bar RL net returns + applied weight
+    path, or ``None`` when the policy artifact is absent / unservable (the honest-NULL
+    placeholder then applies).
+    """
+    from rlallocator.agents.onnx_policy import OnnxPolicy, default_artifact_path
+    from rlallocator.env.backtester import vectorized_backtest
+
+    if not default_artifact_path().is_file():
+        return None
+    policy = OnnxPolicy()
+    nets: list[FloatArray] = []
+    weights: list[FloatArray] = []
+    for fold in folds:
+        oos = returns[fold.test_start : fold.test_end]
+        if oos.shape[0] < lookback + 1:
+            continue
+        obs_matrix = _rl_oos_observations(oos, lookback=lookback, n_assets=n_assets)
+        if obs_matrix.shape[0] == 0:  # pragma: no cover - guarded by the fold-size check
+            continue
+        try:
+            decision_weights = policy.predict_weights(obs_matrix)
+        except Exception:  # pragma: no cover - defensive: a signature mismatch degrades to None
+            return None
+        n_decisions = decision_weights.shape[0]
+        panel_slice = oos[lookback - 1 : lookback - 1 + n_decisions + 1]
+        weight_path = np.vstack([decision_weights, decision_weights[-1:]])
+        result = vectorized_backtest(panel_slice, weight_path, cost_bps=cost_bps)
+        nets.append(np.asarray(result.net_returns, dtype="float64"))
+        weights.append(np.asarray(result.weights, dtype="float64"))
+    if not nets:
+        return None
+    return _ServedRl(net_returns=np.concatenate(nets), weights=np.concatenate(weights))
+
+
+def _rl_oos_observations(oos: FloatArray, *, lookback: int, n_assets: int) -> FloatArray:
+    """Build the per-bar OOS observation matrix for the served policy (data <= t only).
+
+    Each row is the flattened trailing look-back window of returns at decision bar
+    ``t in [lookback-1, n_oos-2]`` concatenated with a flat (all-cash) weight vector —
+    the served policy is stateless across bars and the simplex projection enforces a
+    valid simplex every bar. The weights at ``t`` earn ``r_{t+1}`` (strictly causal).
+    """
+    oos = np.asarray(oos, dtype="float64")
+    n_oos = oos.shape[0]
+    flat = np.zeros(n_assets, dtype="float64")
+    rows = [
+        np.concatenate((oos[t - lookback + 1 : t + 1].ravel(), flat))
+        for t in range(lookback - 1, n_oos - 1)
+    ]
+    if not rows:
+        return np.zeros((0, lookback * n_assets + n_assets), dtype="float64")
+    return np.asarray(rows, dtype="float64")
+
+
 def _build_summary(
     *,
     baseline_nets: dict[str, FloatArray],
+    served_rl: _ServedRl | None,
     committed: dict[str, Any],
     n_seeds: int,
     data_source: str,
 ) -> RlAllocatorSummary:
     """Assemble the JSON-safe summary + the PURE ``rl_beats_baselines`` verdict.
 
-    HONEST DEFAULT: the baseline OOS Sharpes are computed LIVE from the walk-forward
-    folds; the RL-side scalars (median-seed Sharpe, seed band, DM, DSR, PBO, the PURE
-    verdict) come from the committed offline ``metrics.json`` when present. Absent the
-    committed metrics (the bare-scaffold state), the RL side is the honest-NULL
-    placeholder (``rl_beats_baselines=False``) — the served path never re-derives an
-    edge from a live single path.
+    The baseline OOS Sharpes are computed LIVE from the walk-forward folds. When the
+    committed ONNX policy is present, the headline RL OOS Sharpe + the DM test vs. the
+    best baseline are computed LIVE from the SAME walk-forward folds (the served policy,
+    onnxruntime, NO torch); the inherently multi-seed quantities (seed band, DSR, PBO)
+    come from the committed offline ``metrics.json``, and the PURE verdict is RE-DERIVED
+    from the live DM + the committed DSR / seed-lo / PBO gates. Absent the committed
+    policy/metrics (the bare-scaffold state), the RL side is the honest-NULL placeholder
+    (``rl_beats_baselines=False``) — the served path never re-derives an edge from a
+    live single path.
     """
-    from rlallocator.evaluation.metrics import oos_sharpe
+    from rlallocator.evaluation.metrics import max_drawdown, oos_sharpe, turnover
 
     sharpes = {name: _safe_float(oos_sharpe(net)) for name, net in baseline_nets.items()}
     best_baseline = max(sharpes, key=lambda k: sharpes[k])
 
+    seed_lo = _safe_float(committed.get("seed_sharpe_lo", 0.0))
+    deflated = _safe_float(committed.get("deflated_sharpe", 0.0))
+    pbo = _safe_float(committed.get("pbo", 1.0))
+    n_trials = int(committed.get("n_effective_trials", max(1, n_seeds)))
+
+    if served_rl is not None and served_rl.net_returns.size >= 2:
+        # WALK-FORWARD RL HEADLINE: the served policy's OOS Sharpe + the DM vs. the best
+        # baseline are computed LIVE on the concatenated purged folds (torch-free). The
+        # PURE verdict is re-derived from this live DM + the committed DSR / seed / PBO.
+        rl_net = served_rl.net_returns
+        rl_sharpe = _safe_float(oos_sharpe(rl_net))
+        dm_pvalue, rl_beats = _served_rl_verdict(
+            rl_net=rl_net,
+            best_net=baseline_nets[best_baseline],
+            deflated=deflated,
+            seed_lo=seed_lo,
+            pbo=pbo,
+            n_trials=n_trials,
+        )
+        rl_turnover = _safe_float(turnover(served_rl.weights))
+        rl_mdd = _safe_float(max_drawdown(rl_net))
+    else:
+        # Honest-NULL placeholder (no committed policy): the RL side reads the committed
+        # offline scalars (or zeros) and the verdict is False.
+        rl_sharpe = _safe_float(committed.get("oos_sharpe_rl_median", 0.0))
+        dm_pvalue = _safe_float(committed.get("dm_pvalue_vs_best", 1.0))
+        rl_beats = bool(committed.get("rl_beats_baselines", False))
+        rl_turnover = _safe_float(committed.get("turnover", 0.0))
+        rl_mdd = _safe_float(committed.get("max_drawdown", 0.0))
+
     return RlAllocatorSummary(
-        oos_sharpe_rl_median=_safe_float(committed.get("oos_sharpe_rl_median", 0.0)),
+        oos_sharpe_rl_median=rl_sharpe,
         oos_sharpe_1n=sharpes["equal_weight"],
         oos_sharpe_markowitz=sharpes["markowitz"],
         oos_sharpe_riskparity=sharpes["risk_parity"],
         best_baseline=best_baseline,
-        seed_sharpe_lo=_safe_float(committed.get("seed_sharpe_lo", 0.0)),
+        seed_sharpe_lo=seed_lo,
         seed_sharpe_hi=_safe_float(committed.get("seed_sharpe_hi", 0.0)),
-        dm_pvalue_vs_best=_safe_float(committed.get("dm_pvalue_vs_best", 1.0)),
-        deflated_sharpe=_safe_float(committed.get("deflated_sharpe", 0.0)),
-        pbo=_safe_float(committed.get("pbo", 1.0)),
-        turnover=_safe_float(committed.get("turnover", 0.0)),
-        max_drawdown=_safe_float(committed.get("max_drawdown", 0.0)),
-        rl_beats_baselines=bool(committed.get("rl_beats_baselines", False)),
-        n_effective_trials=int(committed.get("n_effective_trials", max(1, n_seeds))),
+        dm_pvalue_vs_best=dm_pvalue,
+        deflated_sharpe=deflated,
+        pbo=pbo,
+        turnover=rl_turnover,
+        max_drawdown=rl_mdd,
+        rl_beats_baselines=rl_beats,
+        n_effective_trials=n_trials,
         data_source=data_source,
     )
+
+
+def _served_rl_verdict(
+    *,
+    rl_net: FloatArray,
+    best_net: FloatArray,
+    deflated: float,
+    seed_lo: float,
+    pbo: float,
+    n_trials: int,
+) -> tuple[float, bool]:
+    """Re-derive the PURE verdict from the live walk-forward DM + committed DSR/seed/PBO.
+
+    Runs the Diebold-Mariano test of the served RL net return vs. the best baseline on
+    the CONCATENATED purged OOS folds, then feeds that live DM (statistic + p-value)
+    together with the committed-offline DSR, across-seed Sharpe lower bound, and PBO
+    through the PURE :func:`rlallocator.evaluation.verdict.derive_verdict`. Returns
+    ``(dm_pvalue, rl_beats_baselines)``. The verdict cannot read ``True`` unless all
+    four gates clear — the same honest, leakage-free rule used offline.
+    """
+    from rlallocator.evaluation.diebold_mariano import diebold_mariano
+    from rlallocator.evaluation.verdict import derive_verdict
+
+    common = int(min(rl_net.size, best_net.size))
+    if common < 2:  # pragma: no cover - guarded by the rl_net.size >= 2 check upstream
+        return 1.0, False
+    dm_statistic, dm_pvalue = diebold_mariano(rl_net[:common], best_net[:common])
+    result = derive_verdict(
+        dm_statistic,
+        dm_pvalue,
+        deflated,
+        seed_lo,
+        pbo,
+        max(1, n_trials),
+    )
+    return _safe_float(dm_pvalue), bool(result.rl_beats_baselines)
 
 
 def _build_figures(
