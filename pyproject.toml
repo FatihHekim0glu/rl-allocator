@@ -41,6 +41,9 @@ classifiers = [
 ]
 dependencies = [
     "numpy>=1.26",
+    # Shared honest-statistics primitives (single source of truth for the
+    # Probabilistic/Deflated Sharpe kernels re-exported by evaluation/dsr.py).
+    "quantcore @ git+https://github.com/FatihHekim0glu/quantcore@v0.1.0",
 ]
 
 [project.urls]
